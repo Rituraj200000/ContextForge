@@ -1,0 +1,6 @@
+{
+  "name": "ContextForge",
+  "description": "Self-growing project memory OS for AI models and coding agents.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
