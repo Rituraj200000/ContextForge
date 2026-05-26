@@ -93,6 +93,10 @@ export default function App() {
   const [customApiKey, setCustomApiKey] = useState<string>(() => localStorage.getItem("cf_api_key") || "");
   const [customModel, setCustomModel] = useState<string>(() => localStorage.getItem("cf_custom_model") || "");
   const [customEndpoint, setCustomEndpoint] = useState<string>(() => localStorage.getItem("cf_custom_endpoint") || "");
+  const [autoResolveContraloop, setAutoResolveContraloop] = useState<boolean>(() => {
+    const item = localStorage.getItem("cf_auto_resolve");
+    return item === null ? true : item === "true";
+  });
 
   useEffect(() => {
     localStorage.setItem("cf_api_provider", apiProvider);
@@ -109,6 +113,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("cf_custom_endpoint", customEndpoint);
   }, [customEndpoint]);
+
+  useEffect(() => {
+    localStorage.setItem("cf_auto_resolve", String(autoResolveContraloop));
+  }, [autoResolveContraloop]);
 
   // Modal controls
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
@@ -246,7 +254,8 @@ export default function App() {
         ai_provider: apiProvider,
         api_key: customApiKey,
         custom_model: customModel,
-        api_endpoint: customEndpoint
+        api_endpoint: customEndpoint,
+        auto_resolve: autoResolveContraloop
       })
     })
       .then(res => res.json())
@@ -372,6 +381,27 @@ export default function App() {
       });
   };
 
+  const [isHealing, setIsHealing] = useState<boolean>(false);
+
+  const handleAutoHeal = () => {
+    if (!activeProject || isHealing) return;
+    setIsHealing(true);
+
+    fetch(`/api/projects/${activeProject.id}/contradictions/auto-heal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(res => res.json())
+      .then(() => {
+        setIsHealing(false);
+        refreshProjectData();
+      })
+      .catch(err => {
+        console.error("Auto-heal failed:", err);
+        setIsHealing(false);
+      });
+  };
+
   // Copy helper
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -387,7 +417,8 @@ export default function App() {
     const notesCount = notes.length;
     const bugsResolved = notes.filter(n => n.metadata.type === "bug" && n.metadata.status === "resolved").length;
     
-    const score = Math.round(((notesCount * 5 + activeClaims * 10) / (notesCount * 5 + activeClaims * 10 + contradictions.length * 15)) * 100);
+    const openContradictions = contradictions.filter(c => c.status === "open").length;
+    const score = Math.round(((notesCount * 5 + activeClaims * 10) / (notesCount * 5 + activeClaims * 10 + openContradictions * 15)) * 100);
     return isNaN(score) ? 100 : Math.min(score, 100);
   }, [notes, claims, contradictions]);
 
@@ -640,8 +671,8 @@ export default function App() {
                   />
                 </div>
 
-                <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-                  <div className="flex items-center gap-3">
+                 <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+                  <div className="flex flex-col gap-2">
                     <div className="flex flex-col">
                       <span className="text-[9px] text-slate-600 font-mono">SPECIFY SOURCE TYPE</span>
                       <select
@@ -655,6 +686,20 @@ export default function App() {
                         <option value="client_requirements">Client email details</option>
                         <option value="adr_history">Architecture board decision (ADR)</option>
                       </select>
+                    </div>
+
+                    <div className="flex items-center gap-2 bg-slate-900/50 px-3 py-2 rounded-lg border border-slate-900/40">
+                      <input
+                        id="auto-heal-checkbox"
+                        type="checkbox"
+                        checked={autoResolveContraloop}
+                        onChange={(e) => setAutoResolveContraloop(e.target.checked)}
+                        className="rounded border-slate-800 text-indigo-500 focus:ring-indigo-500 cursor-pointer w-3.5 h-3.5 accent-indigo-500"
+                      />
+                      <label htmlFor="auto-heal-checkbox" className="text-[10.5px] text-indigo-300 font-mono flex items-center gap-1.5 cursor-pointer select-none">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Auto-Heal Contradictions (keeps Health at 100%)
+                      </label>
                     </div>
                   </div>
 
@@ -847,6 +892,27 @@ export default function App() {
                 <p className="text-xs text-slate-400">
                   When different requirements or statements contradict each other in files, ContextForge raises alerts below. Resolve conflicts below horizontally to preserve context sanity.
                 </p>
+
+                {contradictions.filter(c => c.status === "open").length > 0 && (
+                  <div className="bg-gradient-to-r from-indigo-950/40 to-slate-900 border border-indigo-500/30 p-4 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4 mt-1">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[11px] font-bold text-indigo-400 font-mono uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full bg-indigo-500 animate-ping"></span>
+                        ⚡ Self-Healing System Active
+                      </span>
+                      <p className="text-[11px] text-slate-300">
+                        Compromises have been generated by AI for all {contradictions.filter(c => c.status === "open").length} open contradictions. Let the OS self-heal and auto-align the memory graph now.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleAutoHeal}
+                      disabled={isHealing}
+                      className="whitespace-nowrap bg-indigo-600 hover:bg-slate-200 hover:text-indigo-950 text-white font-semibold text-xs px-4 py-2 rounded-xl transition cursor-pointer flex items-center gap-1.5 disabled:opacity-40"
+                    >
+                      {isHealing ? "Healing..." : "Instant Auto-Heal & Align"}
+                    </button>
+                  </div>
+                )}
 
                 <div className="flex flex-col gap-3 mt-2">
                   {contradictions.filter(c => c.status === "open").length > 0 ? (

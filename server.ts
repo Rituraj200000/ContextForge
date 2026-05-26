@@ -310,7 +310,8 @@ app.post("/api/projects/:projectId/ingest", async (req, res) => {
       ai_provider, 
       api_key, 
       custom_model, 
-      api_endpoint 
+      api_endpoint,
+      auto_resolve
     } = req.body;
 
     if (!input) {
@@ -344,9 +345,7 @@ Analyze the input.
 2. Determine if a new custom wiki note should be CREATED to store this feature detail.
 3. Extract precise "Claims" (underlying rules or assertions like "Mobile thumbnails appear below").
 4. Check if the user's input CONTRADICTS any existing claim or note!
-   If a contradiction exists:
-   - Formulate a Contradiction object (status "open", assign severity).
-   - Flag it so the user can resolve or confirm.
+   If a contradiction exists, identify the precise "conflicting_claim_id" matching its Claim ID (e.g. "claim_abc123" from the verified list) and include it in your output. Formulate a Contradiction object containing a clear "resolution" compromise or resolution rule.
 5. Create professional "Thinking Logs" describing your cognitive progression layers (Layer 1: Input Analysis, Layer 2: Contradiction Check, Layer 3: Memory Routing).
 
 Return a single JSON object strictly matching the following JSON schema:
@@ -388,6 +387,7 @@ Return a single JSON object strictly matching the following JSON schema:
       "old_claim": "The exact wording of the old conflicting claim",
       "new_claim": "The conflicting assertion inside the new input",
       "severity": "high" | "medium" | "low",
+      "conflicting_claim_id": "string | null",
       "resolution": "Proposed compromise or resolution detail"
     }
   ]
@@ -447,32 +447,49 @@ ${updatedNote.content}
       console.error("Failed to append changelog entry:", e);
     }
 
-    // 2. Align Claims
+    // Capture list of claims to auto-archive if resolving
+    const claimsToArchive = new Set<string>();
+
+    // 2. Align Contradictions
+    if (resultObj.contradictions && resultObj.contradictions.length > 0) {
+      const currentContradictions = await engine.readContradictions(projectId);
+      const mergedContras = [...currentContradictions];
+      for (const contra of resultObj.contradictions) {
+        const wantsAuto = !!auto_resolve;
+        mergedContras.push({
+          ...contra,
+          detectedAt: new Date().toISOString(),
+          status: wantsAuto ? "resolved" : "open",
+          resolution: wantsAuto ? (contra.resolution || "Auto-resolved & aligned via Self-Healing cognitive cycle.") : ""
+        });
+        if (wantsAuto && contra.conflicting_claim_id) {
+          claimsToArchive.add(contra.conflicting_claim_id);
+        }
+      }
+      await engine.writeContradictions(projectId, mergedContras);
+    }
+
+    // 3. Align Claims
+    const finalClaims = [...currentClaims];
+    // Archive conflicting ones if auto_resolve happened
+    if (claimsToArchive.size > 0) {
+      for (let i = 0; i < finalClaims.length; i++) {
+        if (claimsToArchive.has(finalClaims[i].claim_id)) {
+          finalClaims[i].status = "archived";
+        }
+      }
+    }
+    // Add new ones
     if (resultObj.claims && resultObj.claims.length > 0) {
-      const mergedClaims = [...currentClaims];
       for (const reqClaim of resultObj.claims) {
         // Assign unique id if missing
         if (!reqClaim.claim_id) {
           reqClaim.claim_id = "claim_" + Math.random().toString(36).substring(2, 9);
         }
-        mergedClaims.push(reqClaim);
+        finalClaims.push(reqClaim);
       }
-      await engine.writeClaims(projectId, mergedClaims);
     }
-
-    // 3. Align Contradictions
-    if (resultObj.contradictions && resultObj.contradictions.length > 0) {
-      const currentContradictions = await engine.readContradictions(projectId);
-      const mergedContras = [...currentContradictions];
-      for (const contra of resultObj.contradictions) {
-        mergedContras.push({
-          ...contra,
-          detectedAt: new Date().toISOString(),
-          status: "open"
-        });
-      }
-      await engine.writeContradictions(projectId, mergedContras);
-    }
+    await engine.writeClaims(projectId, finalClaims);
 
     res.json(resultObj);
   } catch (error: any) {
@@ -510,6 +527,54 @@ app.post("/api/projects/:projectId/contradictions/:contraId/resolve", async (req
     res.json({ status: "success", resolved: contraId });
   } catch (error) {
     res.status(500).json({ error: "Failed to resolve contradiction" });
+  }
+});
+
+// Auto-Heal & Aligns all open contradictions automatically
+app.post("/api/projects/:projectId/contradictions/auto-heal", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const contradictions = await engine.readContradictions(projectId);
+    const claims = await engine.readClaims(projectId);
+
+    const openContras = contradictions.filter(c => c.status === "open");
+    if (openContras.length === 0) {
+      return res.json({ status: "success", message: "Memory is already 100% healthy!" });
+    }
+
+    const claimsToArchive = new Set<string>();
+    const updatedContras = contradictions.map(c => {
+      if (c.status === "open") {
+        if (c.conflicting_claim_id) {
+          claimsToArchive.add(c.conflicting_claim_id);
+        }
+        return { 
+          ...c, 
+          status: "resolved" as const, 
+          resolution: c.resolution || "Self-healing action: resolved using model-proposed compromise." 
+        };
+      }
+      return c;
+    });
+
+    const updatedClaims = claims.map(c => {
+      if (claimsToArchive.has(c.claim_id)) {
+        return { ...c, status: "archived" };
+      }
+      return c;
+    });
+
+    await engine.writeContradictions(projectId, updatedContras);
+    await engine.writeClaims(projectId, updatedClaims);
+
+    res.json({ 
+      status: "success", 
+      message: `Successfully self-healed and aligned ${openContras.length} rule contradictions!`,
+      healedCount: openContras.length
+    });
+  } catch (error: any) {
+    console.error("Auto heal error:", error);
+    res.status(500).json({ error: error.message || "Failed to auto-heal contradictions" });
   }
 });
 

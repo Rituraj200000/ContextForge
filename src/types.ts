@@ -59,6 +59,7 @@ export interface Contradiction {
   resolution: string;
   detectedAt: string;
   status: "open" | "resolved";
+  conflicting_claim_id?: string;
 }
 
 export interface CodeIndexItem {
